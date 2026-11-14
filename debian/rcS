@@ -1,0 +1,15 @@
+#!/bin/sh
+# WebQEMU guest boot script (BusyBox init sysinit action).
+
+# Mount the virtual filesystems. devtmpfs is already mounted on /dev by the
+# kernel, so recreate any mount points we need underneath it first.
+mkdir -p /dev/pts /dev/shm /run /tmp /proc /sys
+
+mount -t proc  proc  /proc
+mount -t sysfs sysfs /sys
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+chmod 1777 /tmp
+
+echo "[rcS] system mounts complete"

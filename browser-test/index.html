@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebQEMU - Linux Boot Test</title>
+  <style>
+    body {
+      background: #111;
+      color: #eee;
+      font-family: monospace;
+      padding: 24px;
+    }
+    h1 { color: #70e090; }
+    #output {
+      background: #050505;
+      color: #b8f5b8;
+      padding: 16px;
+      border: 1px solid #444;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      min-height: 350px;
+      max-height: 65vh;
+      overflow-y: auto;
+    }
+    form {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    input {
+      flex: 1;
+      background: #222;
+      color: white;
+      border: 1px solid #555;
+      padding: 12px;
+      font-family: monospace;
+    }
+    button {
+      background: #246b3b;
+      color: white;
+      border: 0;
+      padding: 12px 20px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebQEMU</h1>
+  <p id="status">Choose a Linux guest to boot.</p>
+  <div id="boot-controls">
+    <label for="guest-select">Guest:</label>
+    <select id="guest-select">
+      <option value="busybox">BusyBox Linux (known working)</option>
+      <option value="debian">Debian 13</option>
+    </select>
+    <button id="boot-button" type="button">Boot guest</button>
+  </div>
+  <pre id="output"></pre>
+
+  <form id="terminal-form">
+    <input id="terminal-input" autocomplete="off"
+           placeholder="Type into the Linux console...">
+    <button type="submit">Send</button>
+  </form>
+
+  <script type="module">
+    import { openpty } from "../node_modules/xterm-pty/index.mjs";
+
+    const status = document.getElementById("status");
+    const output = document.getElementById("output");
+    const form = document.getElementById("terminal-form");
+    const input = document.getElementById("terminal-input");
+    const guestSelect = document.getElementById("guest-select");
+    const bootButton = document.getElementById("boot-button");
+
+    const decoder = new TextDecoder();
+
+    let sendTerminalData = () => {};
+    let sendTerminalBinary = () => {};
+
+    function log(message) {
+      output.textContent += message + "\n";
+      output.scrollTop = output.scrollHeight;
+    }
+
+    function loadClassicScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () =>
+          reject(new Error("Could not load script: " + src));
+        document.head.appendChild(script);
+      });
+    }
+
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+
+      const line = input.value + "\r";
+      sendTerminalData(line);
+      log(`[browser] Sent ${new TextEncoder().encode(line).length} bytes to the PTY.`);
+      input.value = "";
+    });
+
+    async function bootGuest() {
+      bootButton.disabled = true;
+      guestSelect.disabled = true;
+
+      try {
+      status.textContent = "Creating serial console...";
+
+      const { master, slave } = openpty();
+
+      // Disable xterm-pty's local ECHO so text shown in the output area
+      // must come from the guest, not from the browser-side line discipline.
+      // Linux's own serial-console echo remains controlled by the guest.
+      const ptyTermios = slave.ioctl("TCGETS");
+      ptyTermios.lflag &= ~8; // ECHO (0o10)
+      slave.ioctl("TCSETS", ptyTermios);
+      log("PTY diagnostic: browser-side local echo disabled.");
+      log("QEMU diagnostic: monitor disabled; serial input is reserved for the guest.");
+
+      // Connect the PTY master to our browser terminal.
+      master.activate({
+        write(data, callback) {
+          output.textContent += decoder.decode(data, { stream: true });
+          output.scrollTop = output.scrollHeight;
+          callback?.();
+        },
+
+        onData(callback) {
+          sendTerminalData = callback;
+          return {
+            dispose() {
+              if (sendTerminalData === callback) {
+                sendTerminalData = () => {};
+              }
+            }
+          };
+        },
+
+        onBinary(callback) {
+          sendTerminalBinary = callback;
+          return {
+            dispose() {
+              if (sendTerminalBinary === callback) {
+                sendTerminalBinary = () => {};
+              }
+            }
+          };
+        },
+
+        onResize() {
+          return { dispose() {} };
+        }
+      });
+
+      const artifactUrl = new URL("../artifacts/", import.meta.url);
+      const isDebian = guestSelect.value === "debian";
+      const diskPath = isDebian
+        ? "/pack/debian-rootfs.bin"
+        : "/pack/rootfs.bin";
+
+      const config = {
+        pty: slave,
+        arguments: [
+          "-machine", "pc,acpi=on,hpet=on",
+          "-nographic",
+          "-monitor", "none",
+          "-nic", "none",
+          "-m", "512M",
+          "-accel", "tcg,tb-size=500",
+          "-L", "/pack/",
+          "-drive", `if=virtio,format=raw,file=${diskPath}`,
+          "-kernel", "/pack/bzImage",
+          "-append",
+          "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda loglevel=7 noapic tsc=unstable clocksource=jiffies hpet=verbose" +
+            (isDebian ? " rootfstype=ext2 rw" : "")
+        ],
+        mainScriptUrlOrBlob: new URL(
+          "../artifacts/qemu-system-x86_64.js",
+          import.meta.url
+        ).href,
+        locateFile: path => new URL(path, artifactUrl).href,
+        print: log,
+        printErr: message => log("QEMU: " + message)
+      };
+
+      // Share the configuration with the guest package loader.
+      window.Module = config;
+
+      status.textContent = "Loading Linux guest package...";
+
+      await loadClassicScript(
+        new URL("../artifacts/load.js", import.meta.url).href
+      );
+
+      if (isDebian) {
+        status.textContent = "Downloading Debian disk...";
+        const response = await fetch(
+          new URL("../artifacts/debian-rootfs.bin", import.meta.url)
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Could not download Debian disk: HTTP ${response.status}`
+          );
+        }
+
+        const diskBytes = new Uint8Array(await response.arrayBuffer());
+
+        config.preRun = config.preRun || [];
+        config.preRun.push(() => {
+          log("Debian filesystem: creating /pack...");
+          try {
+            config.FS_createPath("/", "pack", true, true);
+            log("Debian filesystem: /pack is ready.");
+
+            config.FS_createDataFile(
+              "/pack",
+              "debian-rootfs.bin",
+              diskBytes,
+              true,
+              true,
+              false
+            );
+            log("Debian filesystem: disk inserted successfully.");
+          } catch (error) {
+            log("Debian filesystem insertion failed:");
+            log("Name: " + (error.name || "unknown"));
+            log("Message: " + (error.message || String(error)));
+            log("Errno: " + (error.errno ?? "unknown"));
+            log("Stack: " + (error.stack || "unavailable"));
+            throw error;
+          }
+        });
+
+        log(`Debian disk downloaded (${diskBytes.byteLength} bytes).`);
+      }
+
+      log("Guest package loader initialized.");
+
+      status.textContent = "Starting QEMU and booting Linux...";
+
+      const imported = await import(
+        "../artifacts/qemu-system-x86_64.js"
+      );
+
+      const createQemu = imported.default;
+      const module = await createQemu(config);
+
+      window.webqemu = module;
+
+      status.textContent = "QEMU runtime initialized. Linux boot attempted.";
+      log("QEMU runtime initialization completed.");
+
+      } catch (error) {
+        status.textContent = "Linux boot test failed.";
+        log("Error name: " + (error?.name || "unknown"));
+        log("Error message: " + (error?.message || String(error)));
+        log("Error stack: " + (error?.stack || "unavailable"));
+        bootButton.disabled = false;
+        guestSelect.disabled = false;
+      }
+    }
+
+    bootButton.addEventListener("click", bootGuest);
+  </script>
+</body>
+</html>

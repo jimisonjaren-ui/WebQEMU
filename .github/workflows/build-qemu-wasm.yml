@@ -1,0 +1,38 @@
+name: Build WebQEMU x86_64 WASM
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/build-qemu-wasm.sh'
+      - 'debian/**'
+      - '.github/workflows/build-qemu-wasm.yml'
+
+permissions:
+  contents: read
+
+env:
+  DOCKER_BUILDKIT: '1'
+
+jobs:
+  build-x86_64:
+    name: Compile QEMU for x86_64 guests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out WebQEMU
+        uses: actions/checkout@v4
+
+      - name: Install Git
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Build QEMU-WASM
+        run: bash scripts/build-qemu-wasm.sh
+
+      - name: Upload compiled WebAssembly runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: webqemu-x86_64-wasm
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
