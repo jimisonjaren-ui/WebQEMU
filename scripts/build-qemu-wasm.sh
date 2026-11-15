@@ -40,7 +40,12 @@ old_variants = [
     "RUN curl -fL https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1",
 ]
 
-replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\\n    mkdir -p /tmp/zlib-src && \\\n    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\\n    rm -rf /zlib && \\\n    mv /tmp/zlib-src /zlib && \\\n    rm -f /tmp/zlib.tar.gz"""
+replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\
+    mkdir -p /tmp/zlib-src && \\
+    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\
+    rm -rf /zlib && \\
+    mv /tmp/zlib-src /zlib && \\
+    rm -f /tmp/zlib.tar.gz"""
 
 for old in old_variants:
     if old in s:
@@ -50,6 +55,38 @@ for old in old_variants:
 else:
     raise SystemExit("ERROR: Could not find the expected zlib command.")
 PATCH_DOCKERFILE
+
+# Emscripten's stdlib already declares getloadavg(). QEMU's fallback shim is
+# intended for hosts without that function, but its configure test does not
+# detect Emscripten's declaration. Skip only that fallback for WASM builds;
+# this does not change the generated JS/WASM/data packaging.
+python3 - "$QEMU_DIR/include/qemu/osdep.h" <<'PATCH_GETLOADAVG'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+old = """#ifndef HAVE_GETLOADAVG_FUNCTION
+static inline int getloadavg(double loadavg[], int nelem)
+{
+    return -1;
+}
+#endif /* !HAVE_GETLOADAVG_FUNCTION */"""
+new = """#if !defined(HAVE_GETLOADAVG_FUNCTION) && !defined(__EMSCRIPTEN__)
+static inline int getloadavg(double loadavg[], int nelem)
+{
+    return -1;
+}
+#endif /* !HAVE_GETLOADAVG_FUNCTION && !__EMSCRIPTEN__ */"""
+
+if new in s:
+    print("Emscripten getloadavg compatibility fix already applied.")
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("Emscripten getloadavg compatibility fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find QEMU's getloadavg fallback in osdep.h.")
+PATCH_GETLOADAVG
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
