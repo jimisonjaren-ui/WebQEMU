@@ -180,10 +180,9 @@ done
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run --rm -d --name "$CONTAINER_NAME" -v "$QEMU_DIR:/qemu" -v "$GUEST_PACK_DIR:/pack:ro" "$IMAGE_NAME" >/dev/null
 
-# Keep compiler-only flags separate from Emscripten linker settings. The previous
-# 64 MiB stack exceeded Emscripten's 16 MiB default initial memory at link time.
+# Keep compiler-only flags separate from Emscripten link-time settings.
 EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE'
-EXTRA_LDFLAGS='-sASYNCIFY=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sTEXTDECODER=0 -sSTACK_SIZE=64MB -sINITIAL_MEMORY=512MB -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS'
+EXTRA_LDFLAGS='--js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sSINGLE_FILE=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS'
 
 # Keep the build parallelism conservative for predictable memory use.
 docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" -e EXTRA_LDFLAGS="$EXTRA_LDFLAGS" "$CONTAINER_NAME" sh -lc '
