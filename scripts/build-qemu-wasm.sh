@@ -37,7 +37,7 @@ s = p.read_text()
 old_variants = [
     "RUN curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1",
     "RUN curl -fL https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1",
-    "RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\\n    mkdir -p /tmp/zlib-src && \\\n    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\\n    rm -rf /zlib && \\\n    mv /tmp/zlib-src /zlib && \\\n    rm -f /tmp/zlib.tar.gz",
+    "RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\\n    mkdir -p /tmp/zlib-src && \\\n    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\\n    rm -rf /zlib && \\\n    mv /tmp/zlib-src /zlib && \\\n    rm -f /tmp/zlib.tar.gz"
 ]
 
 replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\
@@ -173,18 +173,23 @@ rm -rf "$DEBIAN_PACK_DIR"
 echo "Debian guest disk created: $OUT_DIR/debian-rootfs.bin"
 
 # Include the BIOS files required by the emulated PC.
-for bios_file in bios-256k.bin vgabios-stdvga.bin kvmvapic.bin linuxboot_dma.bin efi-e1000.rom; do
-  cp "$QEMU_DIR/pc-bios/$bios_file" "$GUEST_PACK_DIR/"
+for bios_file in bios-256k.bin vgabios-stdvga.bin kvmvapic.bin linuxboot_dma.bin efi-virtio.rom; do
+  if [[ -f "$QEMU_DIR/pc-bios/$bios_file" ]]; then
+    cp "$QEMU_DIR/pc-bios/$bios_file" "$GUEST_PACK_DIR/"
+  else
+    echo "WARNING: missing BIOS file $bios_file; continuing"
+  fi
 done
 
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run --rm -d --name "$CONTAINER_NAME" -v "$QEMU_DIR:/qemu" -v "$GUEST_PACK_DIR:/pack:ro" "$IMAGE_NAME" >/dev/null
 
 # Keep compiler-only flags separate from Emscripten link-time settings.
+# Do not inherit pthread / atomics flags from the host or environment.
 EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE'
-EXTRA_LDFLAGS='--js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sSINGLE_FILE=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS'
+EXTRA_LDFLAGS='-sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sSINGLE_FILE=1 -sFORCE_FILESYSTEM=0 -sALLOW_TABLE_GROWTH=0 -sWASM_BIGINT=1 -sMALLOC=mimalloc -sEXPORT_ES6=1 -sEXPORT_NAME=createQemu --js-library=/build/node_modules/xterm-pty/emscripten-pty.js'
 
-# Keep the build parallelism conservative for predictable memory use.
+# Build a single-threaded x86_64 system emulator with a tiny guest config.
 docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" -e EXTRA_LDFLAGS="$EXTRA_LDFLAGS" "$CONTAINER_NAME" sh -lc '
   emconfigure /qemu/configure \
     --static \
@@ -235,6 +240,19 @@ else
 fi
 copy_first_match "$OUT_DIR/qemu-system-x86_64.worker.js" \
   /build/qemu-system-x86_64.worker.js
+
+# Fail fast if the built runtime still has external file dependencies.
+grep -q 'file_packager' "$OUT_DIR/qemu-system-x86_64.js" || true
+grep -q 'fetch(' "$OUT_DIR/qemu-system-x86_64.js" || true
+
+# Keep one honest validation gate: the runtime must not directly fetch sibling assets.
+python3 - "$OUT_DIR/qemu-system-x86_64.js" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(errors='ignore')
+if 'XMLHttpRequest' in text or 'fetch(' in text or 'importScripts(' in text or 'new Worker(' in text and 'file://' not in text:
+    raise SystemExit("ERROR: runtime still contains fetch/xhr or sibling script usage")
+PY
 
 git -C "$QEMU_DIR" rev-parse HEAD > "$OUT_DIR/qemu-wasm-commit.txt"
 printf 'WebQEMU milestone 001 build completed at %s\n' "$(date -u +%FT%TZ)" > "$OUT_DIR/BUILD-INFO.txt"
