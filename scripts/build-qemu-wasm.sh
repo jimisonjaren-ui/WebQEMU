@@ -58,8 +58,7 @@ PATCH_DOCKERFILE
 
 # Emscripten's stdlib already declares getloadavg(). QEMU's fallback shim is
 # intended for hosts without that function, but its configure test does not
-# detect Emscripten's declaration. Skip only that fallback for WASM builds;
-# this does not change the generated JS/WASM/data packaging.
+# detect Emscripten's declaration. Skip only that fallback for WASM builds.
 python3 - "$QEMU_DIR/include/qemu/osdep.h" <<'PATCH_GETLOADAVG'
 from pathlib import Path
 import sys
@@ -87,6 +86,28 @@ elif old in s:
 else:
     raise SystemExit("ERROR: Could not find QEMU's getloadavg fallback in osdep.h.")
 PATCH_GETLOADAVG
+
+# Meson's posix_memalign feature probe reports false for this Emscripten target,
+# although Emscripten libc provides posix_memalign. QEMU then compiles util/memalign.c
+# with no supported allocator and stops at its #error. Select the available POSIX
+# allocator for this WASM build so aligned allocations are still freed normally.
+python3 - "$QEMU_DIR/meson.build" <<'PATCH_MEMALIGN'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+probe = "config_host_data.set('CONFIG_POSIX_MEMALIGN', cc.has_function('posix_memalign', prefix: '#include <stdlib.h>'))"
+forced = "config_host_data.set('CONFIG_POSIX_MEMALIGN', true)"
+
+if forced in s:
+    print("Emscripten POSIX memalign configuration fix already applied.")
+elif probe in s:
+    p.write_text(s.replace(probe, forced, 1))
+    print("Emscripten POSIX memalign configuration fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find QEMU's POSIX memalign feature probe in meson.build.")
+PATCH_MEMALIGN
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
