@@ -24,10 +24,9 @@ else
   git -C "$QEMU_DIR" pull --ff-only
 fi
 
-# Pin the upstream zlib source to a known-good official fossil archive and validate
-# the content before unpacking it into /zlib. Some upstream mirrors and proxies can
-# return an HTML/error body instead of a tar.gz payload, which makes tar fail with
-# "gzip: stdin: not in gzip format".
+# zlib.net is intermittently returning an HTML/error body in CI, which makes tar
+# fail with "gzip: stdin: not in gzip format". Use the official zlib GitHub
+# mirror instead; it is a valid tar.gz archive and is stable in build environments.
 python3 - "$QEMU_DIR/Dockerfile" <<'PATCH_DOCKERFILE'
 from pathlib import Path
 import sys
@@ -38,9 +37,10 @@ s = p.read_text()
 old_variants = [
     "RUN curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1",
     "RUN curl -fL https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1",
+    "RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\\n    mkdir -p /tmp/zlib-src && \\\n    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\\n    rm -rf /zlib && \\\n    mv /tmp/zlib-src /zlib && \\\n    rm -f /tmp/zlib.tar.gz",
 ]
 
-replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\
+replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\
     mkdir -p /tmp/zlib-src && \\
     tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\
     rm -rf /zlib && \\
@@ -50,7 +50,7 @@ replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossi
 for old in old_variants:
     if old in s:
         p.write_text(s.replace(old, replacement, 1))
-        print("Upstream zlib download fixed.")
+        print("Upstream zlib download fixed with GitHub mirror.")
         break
 else:
     raise SystemExit("ERROR: Could not find the expected zlib command.")
