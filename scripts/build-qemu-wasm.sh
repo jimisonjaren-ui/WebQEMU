@@ -228,8 +228,11 @@ copy_first_match() {
 rm -f "$OUT_DIR"/qemu-system-x86_64.js "$OUT_DIR"/qemu-system-x86_64.wasm "$OUT_DIR"/qemu-system-x86_64.worker.js
 copy_first_match "$OUT_DIR/qemu-system-x86_64.js" \
   /build/qemu-system-x86_64 /build/qemu-system-x86_64.js
-copy_first_match "$OUT_DIR/qemu-system-x86_64.wasm" \
-  /build/qemu-system-x86_64.wasm
+if docker exec "$CONTAINER_NAME" test -f /build/qemu-system-x86_64.wasm; then
+  docker cp "$CONTAINER_NAME:/build/qemu-system-x86_64.wasm" "$OUT_DIR/qemu-system-x86_64.wasm"
+else
+  echo "Single-file Emscripten output: Wasm is embedded in qemu-system-x86_64.js."
+fi
 copy_first_match "$OUT_DIR/qemu-system-x86_64.worker.js" \
   /build/qemu-system-x86_64.worker.js
 
