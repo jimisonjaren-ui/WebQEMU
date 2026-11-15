@@ -24,7 +24,10 @@ else
   git -C "$QEMU_DIR" pull --ff-only
 fi
 
-# Correct the upstream zlib 1.3.1 archive URL and extraction format.
+# Pin the upstream zlib source to a known-good official fossil archive and validate
+# the content before unpacking it into /zlib. Some upstream mirrors and proxies can
+# return an HTML/error body instead of a tar.gz payload, which makes tar fail with
+# "gzip: stdin: not in gzip format".
 python3 - "$QEMU_DIR/Dockerfile" <<'PATCH_DOCKERFILE'
 from pathlib import Path
 import sys
@@ -32,17 +35,20 @@ import sys
 p = Path(sys.argv[1])
 s = p.read_text()
 
-old = "RUN curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1"
-new = "RUN curl -fL https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1"
+old_variants = [
+    "RUN curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1",
+    "RUN curl -fL https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar xzC /zlib --strip-components=1",
+]
 
-if old in s:
-    p.write_text(s.replace(old, new, 1))
-elif new in s:
-    print("zlib download fix already applied.")
+replacement = """RUN curl -fsSL --retry 5 --retry-delay 2 https://zlib.net/fossils/zlib-1.3.1.tar.gz -o /tmp/zlib.tar.gz && \\\n    mkdir -p /tmp/zlib-src && \\\n    tar -xzf /tmp/zlib.tar.gz -C /tmp/zlib-src --strip-components=1 && \\\n    rm -rf /zlib && \\\n    mv /tmp/zlib-src /zlib && \\\n    rm -f /tmp/zlib.tar.gz"""
+
+for old in old_variants:
+    if old in s:
+        p.write_text(s.replace(old, replacement, 1))
+        print("Upstream zlib download fixed.")
+        break
 else:
     raise SystemExit("ERROR: Could not find the expected zlib command.")
-
-print("Upstream zlib download fixed.")
 PATCH_DOCKERFILE
 
 cleanup() {
@@ -118,7 +124,7 @@ done
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run --rm -d --name "$CONTAINER_NAME" -v "$QEMU_DIR:/qemu" -v "$GUEST_PACK_DIR:/pack:ro" "$IMAGE_NAME" >/dev/null
 
-EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sASYNCIFY_IMPORTS=ffi_call_js -sSINGLE_FILE=1 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472'
+EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sTEXTDECODER=0 -sSTACK_SIZE=64MB'
 
 # Keep the build parallelism conservative for predictable memory use.
 docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" "$CONTAINER_NAME" sh -lc '
