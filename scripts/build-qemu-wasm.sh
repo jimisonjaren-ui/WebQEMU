@@ -88,9 +88,7 @@ else:
 PATCH_GETLOADAVG
 
 # Meson's posix_memalign feature probe reports false for this Emscripten target,
-# although Emscripten libc provides posix_memalign. QEMU then compiles util/memalign.c
-# with no supported allocator and stops at its #error. Select the available POSIX
-# allocator for this WASM build so aligned allocations are still freed normally.
+# although Emscripten libc provides posix_memalign.
 python3 - "$QEMU_DIR/meson.build" <<'PATCH_MEMALIGN'
 from pathlib import Path
 import sys
@@ -182,10 +180,13 @@ done
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run --rm -d --name "$CONTAINER_NAME" -v "$QEMU_DIR:/qemu" -v "$GUEST_PACK_DIR:/pack:ro" "$IMAGE_NAME" >/dev/null
 
-EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sTEXTDECODER=0 -sSTACK_SIZE=64MB'
+# Keep compiler-only flags separate from Emscripten linker settings. The previous
+# 64 MiB stack exceeded Emscripten's 16 MiB default initial memory at link time.
+EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE'
+EXTRA_LDFLAGS='-sASYNCIFY=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sWASM_BIGINT -sMALLOC=mimalloc -sTEXTDECODER=0 -sSTACK_SIZE=64MB -sINITIAL_MEMORY=512MB -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS'
 
 # Keep the build parallelism conservative for predictable memory use.
-docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" "$CONTAINER_NAME" sh -lc '
+docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" -e EXTRA_LDFLAGS="$EXTRA_LDFLAGS" "$CONTAINER_NAME" sh -lc '
   emconfigure /qemu/configure \
     --static \
     --target-list=x86_64-softmmu \
@@ -197,7 +198,7 @@ docker exec -e EXTRA_CFLAGS="$EXTRA_CFLAGS" "$CONTAINER_NAME" sh -lc '
     --enable-virtfs \
     --extra-cflags="$EXTRA_CFLAGS" \
     --extra-cxxflags="$EXTRA_CFLAGS" \
-    --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS"
+    --extra-ldflags="$EXTRA_LDFLAGS"
   emmake make -j2 qemu-system-x86_64
 '
 
