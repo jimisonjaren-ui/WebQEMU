@@ -270,7 +270,7 @@ docker exec \
   -e EXTRA_CFLAGS="$EXTRA_CFLAGS" -e EXTRA_LDFLAGS="$EXTRA_LDFLAGS" \
   -e CFLAGS="$IMAGE_CFLAGS_CLEAN" -e CXXFLAGS="$IMAGE_CFLAGS_CLEAN" \
   "$CONTAINER_NAME" sh -c '
-  set -o pipefail
+  set -e
   emconfigure /qemu/configure \
     --static \
     --target-list=x86_64-softmmu \
