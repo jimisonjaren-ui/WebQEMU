@@ -139,6 +139,31 @@ elif old in s:
 else:
     raise SystemExit("ERROR: Could not find QEMU's threads dependency in meson.build.")
 PATCH_THREADS
+# No pthreads in this build: pthread_kill() does not exist in Emscripten's
+# non-threaded libc. cpus_kick_thread() only pokes a vCPU thread, and there is
+# no other thread to poke. Skip the call. (First piece of the no-threads work.)
+python3 - "$QEMU_DIR/system/cpus.c" <<'PATCH_KICK'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+old = "    int err = pthread_kill(cpu->thread->thread, SIG_IPI);"
+new = """#ifdef __EMSCRIPTEN__
+    /* WebQEMU: no pthreads, nothing to signal. */
+    int err = 0;
+#else
+    int err = pthread_kill(cpu->thread->thread, SIG_IPI);
+#endif"""
+
+if "WebQEMU: no pthreads, nothing to signal." in s:
+    print("WebQEMU cpus_kick_thread fix already applied.")
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("WebQEMU cpus_kick_thread fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find pthread_kill in system/cpus.c.")
+PATCH_KICK
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
