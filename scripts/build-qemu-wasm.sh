@@ -264,6 +264,12 @@ docker exec "$CONTAINER_NAME" sh -c '
   node -e "console.log(\"xterm-pty version: \" + require(\"/build/node_modules/xterm-pty/package.json\").version)" || true
   python3 /tmp/webqemu-pty-poll-patch.py
 ' || { echo "ERROR: WebQEMU PTY poll patch step failed." >&2; exit 1; }
+# Strip thread flags baked into the image's pkg-config files (glib, pcre2, ...).
+docker exec "$CONTAINER_NAME" sh -c '
+  find /build/target -name "*.pc" -exec sed -i -e "s/-pthread//g" -e "s/-sPTHREAD_POOL_SIZE=[0-9]*//g" {} +
+  echo "pkg-config files still mentioning pthread:"
+  grep -rl pthread --include="*.pc" /build/target || echo "(none)"
+' || { echo "ERROR: pkg-config cleanup failed." >&2; exit 1; }
 
 # Build a single-threaded x86_64 system emulator with a tiny guest config.
 docker exec \
