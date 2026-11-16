@@ -119,6 +119,26 @@ elif probe in s:
 else:
     raise SystemExit("ERROR: Could not find QEMU's POSIX memalign feature probe in meson.build.")
 PATCH_MEMALIGN
+# Meson's emscripten support turns dependency('threads') into
+# `-pthread -sPTHREAD_POOL_SIZE=4` on the link line. That makes a threaded
+# (shared-memory) build, which DECISIONS D2 forbids. Make it a no-op dependency.
+python3 - "$QEMU_DIR/meson.build" <<'PATCH_THREADS'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+old = "threads = dependency('threads')"
+new = "threads = declare_dependency()"
+
+if new in s:
+    print("Emscripten no-threads dependency fix already applied.")
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("Emscripten no-threads dependency fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find QEMU's threads dependency in meson.build.")
+PATCH_THREADS
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
