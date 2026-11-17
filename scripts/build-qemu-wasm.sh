@@ -261,7 +261,7 @@ EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DWASM_B
 # EXPORT_ES6=0 (an ES-module runtime cannot be loaded by a classic worker).
 # SINGLE_FILE=0 keeps the raw .wasm as a sibling for the separate packer step
 # (DECISIONS D5: do the embedding outside the Emscripten link).
-EXTRA_LDFLAGS='-sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM=0 -sALLOW_TABLE_GROWTH=0 -sWASM_BIGINT=1 -sMALLOC=mimalloc -sMODULARIZE=1 -sEXPORT_NAME=createQemu -sEXPORT_ES6=0 -sENVIRONMENT=web,worker -sSINGLE_FILE=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=3GB --js-library=/build/node_modules/xterm-pty/emscripten-pty.js'
+EXTRA_LDFLAGS='-sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS -sALLOW_TABLE_GROWTH=0 -sWASM_BIGINT=1 -sMALLOC=mimalloc -sMODULARIZE=1 -sEXPORT_NAME=createQemu -sEXPORT_ES6=0 -sENVIRONMENT=web,worker -sSINGLE_FILE=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=3GB --js-library=/build/node_modules/xterm-pty/emscripten-pty.js'
 
 # WebQEMU PTY fix. In the non-threaded build xterm-pty's own stream_ops.read
 # passes the "wait forever" sentinel -1 to PTY_askToWaitAgain, which lands in
