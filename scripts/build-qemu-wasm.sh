@@ -223,6 +223,173 @@ else:
     raise SystemExit("ERROR: Could not find signalfd_compat thread creation in util/compatfd.c.")
 PATCH_COMPATFD
 
+# ---- PATCH_VCPU: run the single vCPU cooperatively inside the main loop ----
+python3 - "$QEMU_DIR/accel/tcg/tcg-accel-ops-mttcg.c" <<'PATCH_VCPU_A'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+
+# 1) inline start instead of thread creation
+old = """    qemu_thread_create(cpu->thread, thread_name, mttcg_cpu_thread_fn,
+                       cpu, QEMU_THREAD_JOINABLE);
+}"""
+new = """#ifdef __EMSCRIPTEN__
+    /* WebQEMU: no threads. Do what mttcg_cpu_thread_fn does before its loop,
+     * on the main thread, then let webqemu_vcpu_slice() drive execution. */
+    (void)thread_name;
+    (void)mttcg_cpu_thread_fn;
+    init_wasm32();
+    tcg_register_thread();
+    qemu_thread_get_self(cpu->thread);
+    cpu->thread_id = qemu_get_thread_id();
+    cpu->neg.can_do_io = true;
+    current_cpu = cpu;
+    cpu_thread_signal_created(cpu);
+    qemu_guest_random_seed_thread_part2(cpu->random_seed);
+    cpu->exit_request = 1;
+    webqemu_vcpu = cpu;
+#else
+    qemu_thread_create(cpu->thread, thread_name, mttcg_cpu_thread_fn,
+                       cpu, QEMU_THREAD_JOINABLE);
+#endif
+}"""
+assert s.count(old) == 1, "PATCH_VCPU_A: start anchor missing"
+s = s.replace(old, new)
+
+# 2) slice function + globals, placed before mttcg_kick_vcpu_thread
+old = "void mttcg_kick_vcpu_thread(CPUState *cpu)\n{"
+new = """#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+CPUState *webqemu_vcpu;
+double webqemu_slice_start;
+
+/* Returns true if the vCPU still has work (caller should not block). */
+bool webqemu_vcpu_slice(void)
+{
+    CPUState *cpu = webqemu_vcpu;
+    if (!cpu) {
+        return false;
+    }
+    current_cpu = cpu;
+    if (cpu_can_run(cpu)) {
+        int r;
+        webqemu_slice_start = emscripten_get_now();
+        qemu_mutex_unlock_iothread();
+        r = tcg_cpus_exec(cpu);
+        qemu_mutex_lock_iothread();
+        switch (r) {
+        case EXCP_DEBUG:
+            cpu_handle_guest_debug(cpu);
+            break;
+        case EXCP_ATOMIC:
+            qemu_mutex_unlock_iothread();
+            cpu_exec_step_atomic(cpu);
+            qemu_mutex_lock_iothread();
+            break;
+        default:
+            break;
+        }
+    }
+    qatomic_set_mb(&cpu->exit_request, 0);
+    qemu_wait_io_event_common(cpu); /* non-blocking: stop requests + work items */
+    return cpu_can_run(cpu) && !cpu_thread_is_idle(cpu);
+}
+#endif
+
+void mttcg_kick_vcpu_thread(CPUState *cpu)
+{"""
+assert s.count(old) == 1, "PATCH_VCPU_A: kick anchor missing"
+s = s.replace(old, new)
+open(p, "w").write(s)
+PATCH_VCPU_A
+
+python3 - "$QEMU_DIR/system/runstate.c" <<'PATCH_VCPU_B'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """    while (!main_loop_should_exit(&status)) {
+        main_loop_wait(false);
+    }
+
+    return status;
+}"""
+new = """#ifdef __EMSCRIPTEN__
+    extern bool webqemu_vcpu_slice(void);
+    extern void emscripten_sleep(unsigned int ms);
+    while (!main_loop_should_exit(&status)) {
+        bool busy = webqemu_vcpu_slice();
+        main_loop_wait(busy);   /* nonblocking while the guest is runnable */
+        if (busy) {
+            emscripten_sleep(0); /* let the browser breathe: input, paint */
+        }
+    }
+#else
+    while (!main_loop_should_exit(&status)) {
+        main_loop_wait(false);
+    }
+#endif
+
+    return status;
+}"""
+assert s.count(old) == 1, "PATCH_VCPU_B: main loop anchor missing"
+s = s.replace(old, new)
+open(p, "w").write(s)
+PATCH_VCPU_B
+
+python3 - "$QEMU_DIR/accel/tcg/cpu-exec.c" <<'PATCH_VCPU_C'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """        while (!cpu_handle_interrupt(cpu, &last_tb)) {
+            TranslationBlock *tb;
+            vaddr pc;
+            uint64_t cs_base;
+            uint32_t flags, cflags;
+"""
+new = old + """
+#ifdef __EMSCRIPTEN__
+            {
+                /* WebQEMU time slice: kick ourselves out after ~12 ms so the
+                 * main loop can run timers, I/O and yield to the browser. */
+                extern double webqemu_slice_start;
+                static unsigned webqemu_n;
+                if ((++webqemu_n & 0xff) == 0 &&
+                    emscripten_get_now() - webqemu_slice_start > 12.0) {
+                    cpu_exit(cpu);
+                }
+            }
+#endif
+"""
+assert s.count(old) == 1, "PATCH_VCPU_C: exec loop anchor missing"
+s = s.replace(old, new)
+inc = '#include "sysemu/cpus.h"\n'
+assert s.count(inc) == 1, "PATCH_VCPU_C: include anchor missing"
+s = s.replace(inc, inc + '#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n#endif\n')
+open(p, "w").write(s)
+PATCH_VCPU_C
+
+# ---- PATCH_POOL: run disk I/O requests inline instead of on worker threads ----
+python3 - "$QEMU_DIR/util/thread-pool.c" <<'PATCH_POOL'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "    trace_thread_pool_submit(pool, req, arg);\n"
+new = old + """
+#ifdef __EMSCRIPTEN__
+    /* WebQEMU: no worker threads. Run synchronously, complete via the BH. */
+    req->state = THREAD_ACTIVE;
+    req->ret = func(arg);
+    smp_wmb();
+    req->state = THREAD_DONE;
+    qemu_bh_schedule(pool->completion_bh);
+    return &req->common;
+#endif
+"""
+assert s.count(old) == 1, "PATCH_POOL: submit anchor missing"
+s = s.replace(old, new)
+open(p, "w").write(s)
+PATCH_POOL
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
