@@ -165,6 +165,35 @@ else:
     raise SystemExit("ERROR: Could not find pthread_kill in system/cpus.c.")
 PATCH_KICK
 
+# No pthreads: QEMU's RCU module starts a "call_rcu" helper thread from a
+# constructor (before main). Skip it under Emscripten. Consequence for now:
+# RCU callbacks are queued but never run (a small memory leak). To be replaced
+# with inline draining from the main loop later.
+python3 - "$QEMU_DIR/util/rcu.c" <<'PATCH_RCU'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+old = """    qemu_thread_create(&thread, "call_rcu", call_rcu_thread,
+                       NULL, QEMU_THREAD_DETACHED);"""
+new = """#ifdef __EMSCRIPTEN__
+    /* WebQEMU: no pthreads, so no call_rcu helper thread. */
+    (void)thread;
+#else
+    qemu_thread_create(&thread, "call_rcu", call_rcu_thread,
+                       NULL, QEMU_THREAD_DETACHED);
+#endif"""
+
+if "WebQEMU: no pthreads, so no call_rcu helper thread." in s:
+    print("WebQEMU call_rcu thread fix already applied.")
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("WebQEMU call_rcu thread fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find the call_rcu thread creation in util/rcu.c.")
+PATCH_RCU
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
