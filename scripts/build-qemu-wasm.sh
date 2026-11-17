@@ -194,6 +194,35 @@ else:
     raise SystemExit("ERROR: Could not find the call_rcu thread creation in util/rcu.c.")
 PATCH_RCU
 
+# The signalfd compat helper thread only exists to turn host signals into pipe
+# writes. A browser delivers no host signals, so skip the thread and just hand
+# back the pipe's read end.
+python3 - "$QEMU_DIR/util/compatfd.c" <<'PATCH_COMPATFD'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+old = """    qemu_thread_create(&thread, "signalfd_compat", sigwait_compat, info,
+                       QEMU_THREAD_DETACHED);"""
+new = """#ifdef __EMSCRIPTEN__
+    /* WebQEMU: no pthreads and no host signals; skip the sigwait helper. */
+    (void)thread;
+    (void)sigwait_compat;
+#else
+    qemu_thread_create(&thread, "signalfd_compat", sigwait_compat, info,
+                       QEMU_THREAD_DETACHED);
+#endif"""
+
+if "WebQEMU: no pthreads and no host signals; skip the sigwait helper." in s:
+    print("WebQEMU signalfd compat fix already applied.")
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print("WebQEMU signalfd compat fix applied.")
+else:
+    raise SystemExit("ERROR: Could not find signalfd_compat thread creation in util/compatfd.c.")
+PATCH_COMPATFD
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
@@ -290,7 +319,7 @@ EXTRA_CFLAGS='-O3 -Wno-error=unused-command-line-argument -mbulk-memory -DWASM_B
 # EXPORT_ES6=0 (an ES-module runtime cannot be loaded by a classic worker).
 # SINGLE_FILE=0 keeps the raw .wasm as a sibling for the separate packer step
 # (DECISIONS D5: do the embedding outside the Emscripten link).
-EXTRA_LDFLAGS='-sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS -sALLOW_TABLE_GROWTH=0 -sWASM_BIGINT=1 -sMALLOC=mimalloc -sMODULARIZE=1 -sEXPORT_NAME=createQemu -sEXPORT_ES6=0 -sENVIRONMENT=web,worker -sSINGLE_FILE=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=3GB --js-library=/build/node_modules/xterm-pty/emscripten-pty.js'
+EXTRA_LDFLAGS='-sASYNCIFY=1 -sASYNCIFY_IMPORTS=ffi_call_js -sFORCE_FILESYSTEM=1 -sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS -sALLOW_TABLE_GROWTH=0 -sWASM_BIGINT=1 -sMALLOC=mimalloc -sMODULARIZE=1 --profiling-funcs -sEXPORT_NAME=createQemu -sEXPORT_ES6=0 -sENVIRONMENT=web,worker -sSINGLE_FILE=0 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=3GB --js-library=/build/node_modules/xterm-pty/emscripten-pty.js'
 
 # WebQEMU PTY fix. In the non-threaded build xterm-pty's own stream_ops.read
 # passes the "wait forever" sentinel -1 to PTY_askToWaitAgain, which lands in
