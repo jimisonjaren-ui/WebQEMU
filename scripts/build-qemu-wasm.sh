@@ -406,6 +406,157 @@ s = s.replace(old, new)
 open(p, "w").write(s)
 PATCH_TBMEM
 
+# ---- PATCH_DISPLAY_A: new file ui/webqemu-display.c (browser display backend) ----
+python3 - "$QEMU_DIR/ui/webqemu-display.c" <<'PATCH_DISPLAY_A'
+import sys
+src = r'''/*
+ * WebQEMU display backend: hands changed screen rectangles to JavaScript.
+ *
+ * The page supplies Module.webqemuDisplay = {
+ *     resize(w, h),                         // surface size changed
+ *     update(ptr, stride, x, y, w, h)       // rect changed; pixels are 32-bit
+ * };                                        // x8r8g8b8 (bytes B,G,R,X) at ptr.
+ * The pixel memory is only valid during the call: copy it right away.
+ */
+#include "qemu/osdep.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include "ui/console.h"
+#include "ui/surface.h"
+#include "ui/qemu-pixman.h"
+
+static DisplayChangeListener webqemu_dcl;
+static DisplaySurface *webqemu_surface;
+
+EM_JS(void, webqemu_js_resize, (int w, int h), {
+    var d = Module["webqemuDisplay"];
+    if (d && d.resize) { d.resize(w, h); }
+});
+
+EM_JS(void, webqemu_js_update, (int ptr, int stride, int x, int y, int w, int h), {
+    var d = Module["webqemuDisplay"];
+    if (d && d.update) { d.update(ptr, stride, x, y, w, h); }
+});
+
+static void webqemu_gfx_update(DisplayChangeListener *dcl,
+                               int x, int y, int w, int h)
+{
+    DisplaySurface *s = webqemu_surface;
+    int sw, sh;
+
+    if (!s) {
+        return;
+    }
+    sw = surface_width(s);
+    sh = surface_height(s);
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > sw) { w = sw - x; }
+    if (y + h > sh) { h = sh - y; }
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    webqemu_js_update((int)(uintptr_t)surface_data(s), surface_stride(s),
+                      x, y, w, h);
+}
+
+static void webqemu_gfx_switch(DisplayChangeListener *dcl,
+                               struct DisplaySurface *new_surface)
+{
+    webqemu_surface = new_surface;
+    if (new_surface) {
+        webqemu_js_resize(surface_width(new_surface),
+                          surface_height(new_surface));
+        webqemu_gfx_update(dcl, 0, 0, surface_width(new_surface),
+                           surface_height(new_surface));
+    }
+}
+
+static bool webqemu_gfx_check_format(DisplayChangeListener *dcl,
+                                     pixman_format_code_t format)
+{
+    return format == PIXMAN_x8r8g8b8;
+}
+
+static void webqemu_refresh(DisplayChangeListener *dcl)
+{
+    graphic_hw_update(dcl->con);
+}
+
+static const DisplayChangeListenerOps webqemu_dcl_ops = {
+    .dpy_name          = "webqemu",
+    .dpy_refresh       = webqemu_refresh,
+    .dpy_gfx_update    = webqemu_gfx_update,
+    .dpy_gfx_switch    = webqemu_gfx_switch,
+    .dpy_gfx_check_format = webqemu_gfx_check_format,
+};
+
+void webqemu_display_init(void);
+void webqemu_display_init(void)
+{
+    QemuConsole *con = NULL;
+    unsigned int i;
+
+    for (i = 0; ; i++) {
+        QemuConsole *c = qemu_console_lookup_by_index(i);
+        if (!c) {
+            break;
+        }
+        if (qemu_console_is_graphic(c)) {
+            con = c;
+            break;
+        }
+    }
+    if (!con) {
+        return; /* no graphic device in this VM */
+    }
+    webqemu_dcl.ops = &webqemu_dcl_ops;
+    webqemu_dcl.con = con;
+    register_displaychangelistener(&webqemu_dcl);
+}
+#endif /* __EMSCRIPTEN__ */
+'''
+open(sys.argv[1], "w").write(src)
+print("PATCH_DISPLAY_A: wrote ui/webqemu-display.c")
+PATCH_DISPLAY_A
+
+# ---- PATCH_DISPLAY_B: compile it ----
+python3 - "$QEMU_DIR/ui/meson.build" <<'PATCH_DISPLAY_B'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "system_ss.add(png)\n"
+new = old + "system_ss.add(files('webqemu-display.c'))\n"
+if "webqemu-display.c" in s:
+    print("PATCH_DISPLAY_B already applied")
+else:
+    assert s.count(old) == 1, "PATCH_DISPLAY_B: meson anchor missing"
+    open(p, "w").write(s.replace(old, new))
+    print("PATCH_DISPLAY_B applied")
+PATCH_DISPLAY_B
+
+# ---- PATCH_DISPLAY_C: call it after the displays are initialised ----
+python3 - "$QEMU_DIR/system/vl.c" <<'PATCH_DISPLAY_C'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "    qemu_display_init(ds, &dpy);\n"
+new = old + """#ifdef __EMSCRIPTEN__
+    {
+        extern void webqemu_display_init(void);
+        webqemu_display_init();
+    }
+#endif
+"""
+if "webqemu_display_init" in s:
+    print("PATCH_DISPLAY_C already applied")
+else:
+    assert s.count(old) == 1, "PATCH_DISPLAY_C: vl.c anchor missing"
+    open(p, "w").write(s.replace(old, new))
+    print("PATCH_DISPLAY_C applied")
+PATCH_DISPLAY_C
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
