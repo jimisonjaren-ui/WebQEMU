@@ -390,6 +390,22 @@ s = s.replace(old, new)
 open(p, "w").write(s)
 PATCH_POOL
 
+# ---- PATCH_TBMEM: generated TB modules must import an UNSHARED memory ----
+python3 - "$QEMU_DIR/tcg/tcg.c" <<'PATCH_TBMEM'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """    0x06, 0x62, 0x75, 0x66, 0x66, 0x65, 0x72,
+    0x02, 0x03, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00,
+};"""
+new = """    0x06, 0x62, 0x75, 0x66, 0x66, 0x65, 0x72,
+    0x02, 0x01, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00, /* WebQEMU: 0x01 = unshared, has max */
+};"""
+assert s.count(old) == 1, "PATCH_TBMEM: mod_header_b anchor missing"
+s = s.replace(old, new)
+open(p, "w").write(s)
+PATCH_TBMEM
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
