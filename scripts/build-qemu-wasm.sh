@@ -617,6 +617,20 @@ copy_first_match() {
 rm -f "$OUT_DIR"/qemu-system-x86_64.js "$OUT_DIR"/qemu-system-x86_64.wasm "$OUT_DIR"/qemu-system-x86_64.worker.js
 copy_first_match "$OUT_DIR/qemu-system-x86_64.js" \
   /build/qemu-system-x86_64 /build/qemu-system-x86_64.js
+
+  # ---- PATCH_PTY_READ: empty PTY read must report EAGAIN, not the made-up errno 1006 ----
+python3 - "$OUT_DIR/qemu-system-x86_64.js" <<'PATCH_PTY_READ'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "if(length&&!readBytes.length){PTY_askToWaitAgain(-1)}"
+new = "if(length&&!readBytes.length){throw new FS.ErrnoError(6)}"
+assert s.count(old) == 1, "PATCH_PTY_READ: read() anchor not found exactly once"
+s = s.replace(old, new)
+open(p, "w").write(s)
+print("PATCH_PTY_READ applied")
+PATCH_PTY_READ
+
 if docker exec "$CONTAINER_NAME" test -f /build/qemu-system-x86_64.wasm; then
   docker cp "$CONTAINER_NAME:/build/qemu-system-x86_64.wasm" "$OUT_DIR/qemu-system-x86_64.wasm"
 elif [[ -s "$OUT_DIR/qemu-system-x86_64.wasm" ]]; then
