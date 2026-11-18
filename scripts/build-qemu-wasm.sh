@@ -572,6 +572,52 @@ trap cleanup EXIT
 sed -i "s/^# CONFIG_ACPI is not set$/CONFIG_ACPI=y/" "$QEMU_DIR/examples/x86_64/image/linux_x86_config"
 grep -q "^CONFIG_ACPI=y$" "$QEMU_DIR/examples/x86_64/image/linux_x86_config" || { echo "ERROR: ACPI kernel config patch failed" >&2; exit 1; }
 
+# ---- PATCH_KCONFIG: kernel options a desktop needs ----
+python3 - "$QEMU_DIR/examples/x86_64/image/linux_x86_config" <<'PATCH_KCONFIG'
+import re, sys
+p = sys.argv[1]
+want = {
+    "CONFIG_DRM": "y", "CONFIG_DRM_BOCHS": "y", "CONFIG_DRM_FBDEV_EMULATION": "y",
+    "CONFIG_FRAMEBUFFER_CONSOLE": "y",
+    "CONFIG_INPUT_EVDEV": "y", "CONFIG_INPUT_MOUSEDEV": "y",
+    "CONFIG_INPUT_KEYBOARD": "y", "CONFIG_KEYBOARD_ATKBD": "y",
+    "CONFIG_INPUT_MOUSE": "y", "CONFIG_MOUSE_PS2": "y",
+    "CONFIG_SYSVIPC": "y", "CONFIG_IPV6": "y",
+}
+marker = "# --- WebQEMU desktop additions ---"
+pat = re.compile(r"^(?:# )?(CONFIG_[A-Z0-9_]+)(?:=.*| is not set)$")
+out = []
+for ln in open(p).read().split("\n"):
+    m = pat.match(ln)
+    if (m and m.group(1) in want) or ln == marker:
+        continue
+    out.append(ln)
+while out and out[-1] == "":
+    out.pop()
+out.append(marker)
+out += [k + "=" + v for k, v in want.items()]
+open(p, "w").write("\n".join(out) + "\n")
+print("PATCH_KCONFIG: wrote", len(want), "options")
+PATCH_KCONFIG
+
+# Resolve dependencies and FAIL the build if the important ones did not stick.
+python3 - "$QEMU_DIR/examples/x86_64/image/Dockerfile" <<'PATCH_KCONFIG_DOCKER'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "COPY ./linux_x86_config ./.config\n"
+new = old + ("RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig && "
+             "grep -E '^CONFIG_(DRM|FB|FRAMEBUFFER|INPUT|KEYBOARD|MOUSE|SYSVIPC|IPV6)' .config | sort && "
+             "grep -q '^CONFIG_DRM_BOCHS=y' .config && grep -q '^CONFIG_INPUT_EVDEV=y' .config && "
+             "grep -q '^CONFIG_SYSVIPC=y' .config && grep -q '^CONFIG_FRAMEBUFFER_CONSOLE=y' .config\n")
+if "olddefconfig" in s:
+    print("PATCH_KCONFIG_DOCKER already applied")
+else:
+    assert s.count(old) == 1, "PATCH_KCONFIG_DOCKER: anchor missing"
+    open(p, "w").write(s.replace(old, new))
+    print("PATCH_KCONFIG_DOCKER applied")
+PATCH_KCONFIG_DOCKER
+
 # Configure BusyBox init to run startup mounts and provide an automatic serial shell.
 cat > "$QEMU_DIR/examples/x86_64/image/inittab" <<'INITTAB'
 ::sysinit:/etc/init.d/rcS
