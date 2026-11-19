@@ -9,7 +9,7 @@ on:
       - '.github/workflows/build-qemu-wasm.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   DOCKER_BUILDKIT: '1'
@@ -36,3 +36,26 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish desktop disk to the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # The build may leave the disk in 90 MB parts; join them if so.
+          if ls debian-desktop.bin.gz.part-* >/dev/null 2>&1; then
+            cat debian-desktop.bin.gz.part-* > debian-desktop.bin.gz
+          fi
+          test -s debian-desktop.bin.gz
+          test -s debian-desktop.size
+          sha256sum debian-desktop.bin.gz > debian-desktop.bin.gz.sha256
+          ls -l debian-desktop.bin.gz debian-desktop.bin.gz.sha256 debian-desktop.size
+          if ! gh release view desktop-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create desktop-latest --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --prerelease \
+              --title "Desktop disk (rolling)" \
+              --notes "Xfce + Firefox root disk for WebQEMU. Replaced by each build."
+          fi
+          gh release upload desktop-latest --repo "$GITHUB_REPOSITORY" --clobber \
+            debian-desktop.bin.gz debian-desktop.bin.gz.sha256 debian-desktop.size
