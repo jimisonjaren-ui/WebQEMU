@@ -737,6 +737,21 @@ cp "$DEBIAN_PACK_DIR/debian-rootfs.bin" "$OUT_DIR/debian-rootfs.bin"
 rm -rf "$DEBIAN_PACK_DIR"
 echo "Debian guest disk created: $OUT_DIR/debian-rootfs.bin"
 
+# ---- DESKTOP_IMAGE: Xorg + Xfce + Firefox root disk (separate from the base disk) ----
+DESKTOP_PACK_DIR="$OUT_DIR/.desktop-pack"
+rm -rf "$DESKTOP_PACK_DIR"
+mkdir -p "$DESKTOP_PACK_DIR"
+docker build --output="type=local,dest=$DESKTOP_PACK_DIR" \
+  -f "$ROOT_DIR/debian/Dockerfile.desktop" "$ROOT_DIR/debian"
+if [[ ! -s "$DESKTOP_PACK_DIR/debian-desktop.bin" ]]; then
+  echo "ERROR: desktop root filesystem image was not created." >&2
+  exit 1
+fi
+stat -c %s "$DESKTOP_PACK_DIR/debian-desktop.bin" > "$OUT_DIR/debian-desktop.size"
+gzip -6 -c "$DESKTOP_PACK_DIR/debian-desktop.bin" > "$OUT_DIR/debian-desktop.bin.gz"
+rm -rf "$DESKTOP_PACK_DIR"
+echo "Desktop guest disk created: $OUT_DIR/debian-desktop.bin.gz (raw $(cat "$OUT_DIR/debian-desktop.size") bytes)"
+
 # Include the BIOS files required by the emulated PC.
 for bios_file in bios-256k.bin vgabios-stdvga.bin kvmvapic.bin linuxboot_dma.bin efi-virtio.rom; do
   if [[ -f "$QEMU_DIR/pc-bios/$bios_file" ]]; then
