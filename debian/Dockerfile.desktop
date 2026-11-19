@@ -1,0 +1,45 @@
+FROM debian:trixie-slim AS desktop-rootfs
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      busybox-static ca-certificates e2fsprogs procps xauth \
+      xserver-xorg-core xserver-xorg-input-evdev x11-xkb-utils xkb-data x11-xserver-utils \
+      dbus dbus-x11 \
+      xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-settings xfce4-terminal thunar \
+      adwaita-icon-theme fonts-dejavu-core \
+      firefox-esr && \
+    rm -rf /var/lib/apt/lists/*
+
+# Unprivileged desktop user; trim things a tiny disk does not need.
+RUN useradd -m -u 1000 -s /bin/sh user && \
+    rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /var/cache/apt/* /var/log/apt/* && \
+    find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' -exec rm -rf {} +
+
+RUN mkdir -p /rootfs && \
+    cp -a /bin /etc /lib /lib64 /sbin /usr /var /rootfs/ && \
+    mkdir -p /rootfs/etc/init.d /rootfs/dev /rootfs/proc /rootfs/sys \
+      /rootfs/dev/pts /rootfs/run /rootfs/tmp \
+      /rootfs/home /rootfs/root /rootfs/boot \
+      /rootfs/media /rootfs/mnt /rootfs/opt /rootfs/srv && \
+    cp -a /home/user /rootfs/home/ && \
+    mknod -m 600 /rootfs/dev/console c 5 1 && \
+    mknod -m 660 /rootfs/dev/ttyS0 c 4 64 && \
+    ln -sf /bin/busybox /rootfs/sbin/init && \
+    chmod 1777 /rootfs/tmp && \
+    echo webqemu-desktop > /rootfs/etc/hostname
+
+COPY inittab /rootfs/etc/inittab
+COPY rcS.desktop /rootfs/etc/init.d/rcS
+COPY webqemu-session /rootfs/usr/local/bin/webqemu-session
+COPY xorg-webqemu.conf /rootfs/etc/X11/xorg.conf.d/10-webqemu.conf
+
+RUN chmod 755 /rootfs/etc/init.d/rcS /rootfs/usr/local/bin/webqemu-session && \
+    SIZE_MB=$(( $(du -sm /rootfs | cut -f1) * 12 / 10 + 64 )) && \
+    echo "desktop rootfs image size: ${SIZE_MB} MiB" && \
+    dd if=/dev/zero of=/debian-desktop.bin bs=1M count=0 seek=${SIZE_MB} status=none && \
+    mke2fs -F -t ext2 -m 0 -i 8192 -d /rootfs /debian-desktop.bin
+
+FROM scratch
+COPY --from=desktop-rootfs /debian-desktop.bin /debian-desktop.bin
