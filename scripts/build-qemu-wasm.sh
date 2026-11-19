@@ -557,6 +557,75 @@ else:
     print("PATCH_DISPLAY_C applied")
 PATCH_DISPLAY_C
 
+# ---- PATCH_INPUT: let the page inject keyboard and mouse events ----
+python3 - "$QEMU_DIR/ui/webqemu-display.c" <<'PATCH_INPUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if "webqemu_buf" in s:
+    print("PATCH_INPUT already applied")
+    sys.exit(0)
+
+inc_old = '#include "ui/qemu-pixman.h"\n'
+inc_new = inc_old + '#include "ui/input.h"\n#include "qapi/qapi-types-ui.h"\n#include "qapi/util.h"\n'
+assert s.count(inc_old) == 1, "PATCH_INPUT: include anchor missing"
+s = s.replace(inc_old, inc_new)
+
+end_old = "#endif /* __EMSCRIPTEN__ */\n"
+assert s.count(end_old) == 1, "PATCH_INPUT: end anchor missing"
+code = r'''
+/* ---- input injection, called from JavaScript as Module._webqemu_* ---- */
+static char webqemu_namebuf[64];
+
+EMSCRIPTEN_KEEPALIVE char *webqemu_buf(void)
+{
+    return webqemu_namebuf;
+}
+
+/* The page writes a QKeyCode name (e.g. "a", "ret", "shift") into the buffer. */
+EMSCRIPTEN_KEEPALIVE int webqemu_key(int down)
+{
+    int q;
+    webqemu_namebuf[sizeof(webqemu_namebuf) - 1] = 0;
+    q = qapi_enum_parse(&QKeyCode_lookup, webqemu_namebuf, -1, NULL);
+    if (q < 0) {
+        return -1;
+    }
+    qemu_input_event_send_key_qcode(NULL, (QKeyCode)q, down != 0);
+    return 0;
+}
+
+/* Absolute pointer, 0..32767 on both axes (for virtio-tablet-pci). */
+EMSCRIPTEN_KEEPALIVE void webqemu_mouse_abs(int x, int y)
+{
+    qemu_input_queue_abs(NULL, INPUT_AXIS_X, x, 0, 32768);
+    qemu_input_queue_abs(NULL, INPUT_AXIS_Y, y, 0, 32768);
+    qemu_input_event_sync();
+}
+
+/* btn: 0 left, 1 middle, 2 right. */
+EMSCRIPTEN_KEEPALIVE void webqemu_mouse_btn(int btn, int down)
+{
+    InputButton b = btn == 0 ? INPUT_BUTTON_LEFT :
+                    btn == 1 ? INPUT_BUTTON_MIDDLE : INPUT_BUTTON_RIGHT;
+    qemu_input_queue_btn(NULL, b, down != 0);
+    qemu_input_event_sync();
+}
+
+/* dir: -1 wheel up, +1 wheel down (one notch). */
+EMSCRIPTEN_KEEPALIVE void webqemu_mouse_wheel(int dir)
+{
+    InputButton b = dir < 0 ? INPUT_BUTTON_WHEEL_UP : INPUT_BUTTON_WHEEL_DOWN;
+    qemu_input_queue_btn(NULL, b, true);
+    qemu_input_queue_btn(NULL, b, false);
+    qemu_input_event_sync();
+}
+'''
+s = s.replace(end_old, code + end_old)
+open(p, "w").write(s)
+print("PATCH_INPUT applied")
+PATCH_INPUT
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 }
