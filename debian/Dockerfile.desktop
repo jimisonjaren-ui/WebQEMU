@@ -6,7 +6,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       busybox-static ca-certificates e2fsprogs procps xauth \
       xserver-xorg-core xserver-xorg-input-evdev x11-xkb-utils xkb-data x11-xserver-utils \
-      dbus dbus-x11 \
+      dbus dbus-x11 x11-utils dex \
       xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-settings xfce4-terminal thunar \
       adwaita-icon-theme fonts-dejavu-core \
       firefox-esr && \
