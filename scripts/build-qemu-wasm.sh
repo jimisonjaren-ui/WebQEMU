@@ -262,6 +262,14 @@ new = """#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 CPUState *webqemu_vcpu;
 double webqemu_slice_start;
+double webqemu_slice_ms = 12.0;
+
+EMSCRIPTEN_KEEPALIVE void webqemu_set_slice_ms(double ms)
+{
+    if (ms >= 1.0 && ms <= 1000.0) {
+        webqemu_slice_ms = ms;
+    }
+}
 
 /* Returns true if the vCPU still has work (caller should not block). */
 bool webqemu_vcpu_slice(void)
@@ -352,9 +360,10 @@ new = old + """
                 /* WebQEMU time slice: kick ourselves out after ~12 ms so the
                  * main loop can run timers, I/O and yield to the browser. */
                 extern double webqemu_slice_start;
+                extern double webqemu_slice_ms;
                 static unsigned webqemu_n;
                 if ((++webqemu_n & 0xff) == 0 &&
-                    emscripten_get_now() - webqemu_slice_start > 12.0) {
+                    emscripten_get_now() - webqemu_slice_start > webqemu_slice_ms) {
                     cpu_exit(cpu);
                 }
             }
@@ -652,6 +661,8 @@ want = {
     "CONFIG_INPUT_KEYBOARD": "y", "CONFIG_KEYBOARD_ATKBD": "y",
     "CONFIG_INPUT_MOUSE": "y", "CONFIG_MOUSE_PS2": "y",
     "CONFIG_SYSVIPC": "y", "CONFIG_IPV6": "y",
+    "CONFIG_HW_RANDOM": "y", "CONFIG_HW_RANDOM_VIRTIO": "y",
+    "CONFIG_RANDOM_TRUST_CPU": "y", "CONFIG_RANDOM_TRUST_BOOTLOADER": "y",
 }
 marker = "# --- WebQEMU desktop additions ---"
 pat = re.compile(r"^(?:# )?(CONFIG_[A-Z0-9_]+)(?:=.*| is not set)$")
@@ -676,9 +687,10 @@ p = sys.argv[1]
 s = open(p).read()
 old = "COPY ./linux_x86_config ./.config\n"
 new = old + ("RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig && "
-             "grep -E '^CONFIG_(DRM|FB|FRAMEBUFFER|INPUT|KEYBOARD|MOUSE|SYSVIPC|IPV6)' .config | sort && "
+             "grep -E '^CONFIG_(DRM|FB|FRAMEBUFFER|INPUT|KEYBOARD|MOUSE|SYSVIPC|IPV6|HW_RANDOM|RANDOM_TRUST)' .config | sort && "
              "grep -q '^CONFIG_DRM_BOCHS=y' .config && grep -q '^CONFIG_INPUT_EVDEV=y' .config && "
-             "grep -q '^CONFIG_SYSVIPC=y' .config && grep -q '^CONFIG_FRAMEBUFFER_CONSOLE=y' .config\n")
+             "grep -q '^CONFIG_SYSVIPC=y' .config && grep -q '^CONFIG_FRAMEBUFFER_CONSOLE=y' .config && "
+             "grep -q '^CONFIG_HW_RANDOM_VIRTIO=y' .config\n")
 if "olddefconfig" in s:
     print("PATCH_KCONFIG_DOCKER already applied")
 else:
