@@ -1,19 +1,26 @@
 #!/bin/sh
 export HOME=/home/user USER=user LOGNAME=user DISPLAY=:0 LANG=C.UTF-8
 export XDG_RUNTIME_DIR=/run/user/1000
-# No 3D, no accessibility bus: both are slow to start under emulation.
 export GDK_GL=disable GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=1
 export MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 MOZ_DISABLE_RDD_SANDBOX=1 MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1
 xset s off -dpms 2>/dev/null
-exec dbus-launch --exit-with-session sh -c '
-  xfsettingsd &
-  xfwm4 --compositor=off &
-  i=0
-  until xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q window; do
-    i=$((i+1)); [ "$i" -gt 600 ] && break; sleep 1
-  done
-  xfce4-panel &
-  xfdesktop &
-  dex --autostart --environment XFCE &
-  wait
-'
+xsetroot -solid '#2b4a6f'
+cat > "$HOME/.jwmrc" <<'EOF'
+<?xml version="1.0"?>
+<JWM>
+  <RootMenu onroot="12">
+    <Program label="Firefox">firefox-esr</Program>
+    <Program label="Files">pcmanfm</Program>
+    <Program label="Terminal">xterm</Program>
+  </RootMenu>
+  <Tray x="0" y="-1" height="32">
+    <TrayButton label="Menu">root:1</TrayButton>
+    <TrayButton label="Firefox">exec:firefox-esr</TrayButton>
+    <TrayButton label="Files">exec:pcmanfm</TrayButton>
+    <TrayButton label="Terminal">exec:xterm</TrayButton>
+    <TaskList/>
+    <Clock format="%H:%M"/>
+  </Tray>
+</JWM>
+EOF
+exec dbus-launch --exit-with-session jwm
