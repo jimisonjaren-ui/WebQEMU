@@ -415,6 +415,88 @@ s = s.replace(old, new)
 open(p, "w").write(s)
 PATCH_TBMEM
 
+# ---- PATCH_INSTANTIATE_NUM: runtime-tunable JIT hot-block threshold ----
+python3 - "$QEMU_DIR/tcg/wasm32.c" "$QEMU_DIR/tcg/wasm32.h" <<'PATCH_INSTANTIATE_NUM_B'
+import re, sys
+
+c_path, h_path = sys.argv[1], sys.argv[2]
+
+h = open(h_path).read()
+if "webqemu_instantiate_num_get" in h:
+    print("[PATCH_INSTANTIATE_NUM] header already patched")
+else:
+    anchor = "#define INSTANTIATE_NUM 1500\n"
+    assert h.count(anchor) == 1, "header anchor not found exactly once"
+    add = anchor + (
+        "\n"
+        "/* WebQEMU: INSTANTIATE_NUM is only the initial value of webqemu_instantiate_num;\n"
+        " * retune at runtime via Module._webqemu_set_instantiate_num(n). */\n"
+        "extern int webqemu_instantiate_num;\n"
+        "int webqemu_instantiate_num_get(void);\n"
+    )
+    h = h.replace(anchor, add, 1)
+    open(h_path, "w").write(h)
+    print("[PATCH_INSTANTIATE_NUM] header patched")
+
+c = open(c_path).read()
+if "webqemu_instantiate_num_get" in c:
+    print("[PATCH_INSTANTIATE_NUM] source already patched")
+else:
+    inc = '#include "wasm32.h"\n'
+    assert c.count(inc) == 1, "include anchor not found exactly once"
+    body = (
+        "\n"
+        "/* ---- WebQEMU: runtime-tunable JIT instantiation threshold ---- */\n"
+        "int webqemu_instantiate_num = INSTANTIATE_NUM;\n"
+        "#define WEBQEMU_INSTANTIATE_MAX (1 << 20)\n"
+        "\n"
+        "int webqemu_instantiate_num_get(void)\n"
+        "{\n"
+        "    int n = webqemu_instantiate_num;\n"
+        "    if (n < 1) n = 1;\n"
+        "    if (n > WEBQEMU_INSTANTIATE_MAX) n = WEBQEMU_INSTANTIATE_MAX;\n"
+        "    return n;\n"
+        "}\n"
+        "\n"
+        "EMSCRIPTEN_KEEPALIVE int webqemu_set_instantiate_num(int n)\n"
+        "{\n"
+        "    if (n < 1) n = 1;\n"
+        "    if (n > WEBQEMU_INSTANTIATE_MAX) n = WEBQEMU_INSTANTIATE_MAX;\n"
+        "    webqemu_instantiate_num = n;\n"
+        "    return webqemu_instantiate_num_get();\n"
+        "}\n"
+    )
+    c = c.replace(inc, inc + body, 1)
+    subs = [
+        ("*(uint32_t*)tb_counter_ptr = INSTANTIATE_NUM; // will be instanciated immediately",
+         "*(uint32_t*)tb_counter_ptr = webqemu_instantiate_num_get(); // will be instanciated immediately"),
+        ("(*(int32_t*)tb_counter_ptr >= 0) && (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM)",
+         "(*(int32_t*)tb_counter_ptr >= 0) && (*(int32_t*)tb_counter_ptr < webqemu_instantiate_num_get())"),
+        ("} else if (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM) {",
+         "} else if (*(int32_t*)tb_counter_ptr < webqemu_instantiate_num_get()) {"),
+    ]
+    for old, new in subs:
+        n = c.count(old)
+        assert n >= 1, "missing site: " + old
+        c = c.replace(old, new)
+        print("[PATCH_INSTANTIATE_NUM] rewrote %d x %s" % (n, old[:52]))
+    open(c_path, "w").write(c)
+    print("[PATCH_INSTANTIATE_NUM] source patched")
+
+cl = open(c_path).read().split("\n")
+hl = open(h_path).read().split("\n")
+c_lines = [(i + 1, l) for i, l in enumerate(cl) if "INSTANTIATE_NUM" in l]
+h_lines = [(i + 1, l) for i, l in enumerate(hl) if "INSTANTIATE_NUM" in l]
+assert len(h_lines) == 1 and re.fullmatch(r"#define INSTANTIATE_NUM 1500", h_lines[0][1].strip()), h_lines
+for ln, l in c_lines:
+    assert re.fullmatch(r"\s*int webqemu_instantiate_num = INSTANTIATE_NUM;\s*", l), \
+        "UNEXPECTED surviving macro use at wasm32.c:%d: %s" % (ln, l.strip())
+assert len(c_lines) == 1, "expected exactly the initialiser, got %d" % len(c_lines)
+n_get = "\n".join(cl).count("webqemu_instantiate_num_get()")
+assert n_get == 5, "expected 4 call sites + the return in the setter, got %d" % n_get
+print("[PATCH_INSTANTIATE_NUM] OK (%d getter call sites)" % n_get)
+PATCH_INSTANTIATE_NUM_B
+
 # ---- PATCH_DISPLAY_A: new file ui/webqemu-display.c (browser display backend) ----
 python3 - "$QEMU_DIR/ui/webqemu-display.c" <<'PATCH_DISPLAY_A'
 import sys
