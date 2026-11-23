@@ -1,5 +1,6 @@
 #!/bin/sh
 export HOME=/home/user USER=user LOGNAME=user DISPLAY=:0 LANG=C.UTF-8
+export PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 export XDG_RUNTIME_DIR=/run/user/1000
 export GDK_GL=disable GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=1
 export MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 MOZ_DISABLE_RDD_SANDBOX=1 MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1
