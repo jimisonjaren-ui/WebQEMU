@@ -429,7 +429,7 @@ else:
     assert h.count(anchor) == 1, "header anchor not found exactly once"
     add = anchor + (
         "\n"
-        "/* WebQEMU: INSTANTIATE_NUM is only the initial value of webqemu_instantiate_num;\n"
+       "/* WebQEMU: the macro above is only the initial value of webqemu_instantiate_num;\n"
         " * retune at runtime via Module._webqemu_set_instantiate_num(n). */\n"
         "extern int webqemu_instantiate_num;\n"
         "int webqemu_instantiate_num_get(void);\n"
