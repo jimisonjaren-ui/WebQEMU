@@ -34,8 +34,13 @@ COPY inittab /rootfs/etc/inittab
 COPY rcS.desktop /rootfs/etc/init.d/rcS
 COPY webqemu-session /rootfs/usr/local/bin/webqemu-session
 COPY xorg-webqemu.conf /rootfs/etc/X11/xorg.conf.d/10-webqemu.conf
+COPY ffmon /rootfs/usr/local/bin/ffmon
+COPY firefox-webqemu.js /rootfs/usr/lib/firefox-esr/defaults/pref/webqemu.js
+COPY firefox-policies.json /rootfs/usr/lib/firefox-esr/distribution/policies.json
+COPY firefox-webqemu.js /rootfs/etc/firefox-esr/webqemu.js
+COPY firefox-policies.json /rootfs/etc/firefox/policies/policies.json
 
-RUN chmod 755 /rootfs/etc/init.d/rcS /rootfs/usr/local/bin/webqemu-session && \
+RUN chmod 755 /rootfs/etc/init.d/rcS /rootfs/usr/local/bin/webqemu-session /rootfs/usr/local/bin/ffmon && \
     SIZE_MB=$(( $(du -sm /rootfs | cut -f1) * 12 / 10 + 64 )) && \
     echo "desktop rootfs image size: ${SIZE_MB} MiB" && \
     dd if=/dev/zero of=/debian-desktop.bin bs=1M count=0 seek=${SIZE_MB} status=none && \
