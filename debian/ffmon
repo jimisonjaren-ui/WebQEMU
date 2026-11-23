@@ -1,0 +1,15 @@
+#!/bin/sh
+# ffmon: launch Firefox, log time-to-window plus memory/CPU every 5 s.
+t0=$(date +%s); seen=0; end=0
+firefox-esr about:blank >/dev/null 2>&1 &
+while :; do
+  n=$(( $(date +%s) - t0 ))
+  av=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+  cpu=$(awk '/^cpu /{print "user="$2" sys="$4" iowait="$6}' /proc/stat)
+  echo "${n}s avail=${av}MB $cpu"
+  if [ $seen = 0 ] && xwininfo -root -tree 2>/dev/null | grep -qi firefox; then
+    echo "=== WINDOW at ${n}s ==="; seen=1; end=$((n+30))
+  fi
+  [ $seen = 1 ] && [ $n -ge $end ] && break
+  sleep 5
+done
